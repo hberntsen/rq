@@ -146,10 +146,6 @@ class TestRegistry(RQTestCase):
         self.assertEqual(self.registry.get_expired_job_ids(), ['foo'])
         self.assertEqual(self.registry.get_expired_job_ids(timestamp + 20), ['foo', 'bar'])
 
-        # CanceledJobRegistry does not implement get_expired_job_ids()
-        registry = CanceledJobRegistry(connection=self.connection)
-        self.assertRaises(NotImplementedError, registry.get_expired_job_ids)
-
     def test_cleanup_moves_jobs_to_failed_job_registry(self):
         """Moving expired jobs to FailedJobRegistry."""
         queue = Queue(connection=self.connection)
@@ -360,10 +356,6 @@ class TestFinishedJobRegistry(RQTestCase):
 
         self.registry.cleanup(timestamp + 20)
         self.assertEqual(self.registry.get_job_ids(), ['baz'])
-
-        # CanceledJobRegistry now implements noop cleanup, should not raise exception
-        registry = CanceledJobRegistry(connection=self.connection)
-        registry.cleanup()
 
     def test_jobs_are_put_in_registry(self):
         """Completed jobs are added to FinishedJobRegistry."""
@@ -631,3 +623,40 @@ class TestFailedJobRegistry(RQTestCase):
         job = q.enqueue(div_by_zero, failure_ttl=5)
         w.handle_job_failure(job, q)
         self.assertLess(self.connection.zscore(registry.key, job.id), timestamp + 7)
+
+
+class TestCanceledJobRegistry(RQTestCase):
+    def setUp(self):
+        super().setUp()
+        self.registry = CanceledJobRegistry(connection=self.connection)
+
+    def test_add_with_ttl(self):
+        """Job TTL defaults to +inf"""
+        queue = Queue(connection=self.connection)
+        job = queue.enqueue(say_hello)
+
+        key = self.registry.key
+
+        self.registry.add(job)
+        score = self.connection.zscore(key, job.id)
+        self.assertEqual(score, float("inf"))
+
+        timestamp = current_timestamp()
+        ttl = 5
+        self.registry.add(job, ttl=ttl)
+        score = self.connection.zscore(key, job.id)
+        self.assertLess(score, timestamp + ttl + 2)
+        self.assertGreater(score, timestamp + ttl - 2)
+
+    def test_cleanup(self):
+        """Finished job registry removes expired jobs."""
+        timestamp = current_timestamp()
+        self.connection.zadd(self.registry.key, {"foo": 1})
+        self.connection.zadd(self.registry.key, {"bar": timestamp + 10})
+        self.connection.zadd(self.registry.key, {"baz": timestamp + 30})
+
+        self.registry.cleanup()
+        self.assertEqual(self.registry.get_job_ids(), ["bar", "baz"])
+
+        self.registry.cleanup(timestamp + 20)
+        self.assertEqual(self.registry.get_job_ids(), ["baz"])

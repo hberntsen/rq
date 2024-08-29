@@ -1169,7 +1169,7 @@ class Job:
                 registry = CanceledJobRegistry(
                     self.origin, self.connection, job_class=self.__class__, serializer=self.serializer
                 )
-                registry.add(self, pipeline=pipe)
+                registry.add(self, pipeline=pipe, ttl=self.ttl)
                 if pipeline is None:
                     pipe.execute()
                 break
